@@ -1,342 +1,15 @@
 import sys
+import pandas
 import pathlib as path
 import numpy as np
-import matplotlib.pyplot as plt
 
+sys.path.append('../PyBaseNlp')
+from PyBaseNlp import DataPlot
+from PyBaseNlp import DataTools
+from PyBaseNlp import TextNorm
+from PyBaseNlp import TextTools
 
 
-# # Loading the data
-# We shuffle the data frame in case the classes would be sorted.
-# This can be done with the **reindex** method applied on the **permutation** of the original indices.
-# In this notebook we will only focus on the text variable and the class variable.
-import pandas # as pd
-from io import StringIO
-def DataCsvGet(csv_str:str):
-	TESTDATA = StringIO(csv_str)
-	data_frame = pandas.read_csv(TESTDATA, engine='python')
-	return(data_frame)
-
-def DataCsvLoad(file_path:path, scrumbele:bool)->pandas:
-	pandas.set_option('display.max_colwidth', -1)
-	data_frame = pandas.read_csv(file_path, engine='python',index_col=False)
-	if(scrumbele):
-		data_frame = data_frame.reindex(np.random.permutation(data_frame.index))
-	return(data_frame)
-
-def DataCsvSave(data_file:pandas.DataFrame, file_path:path):
-	data_file.to_csv(file_path, index=False)
-	return
-
-def DataCsvSplit(in_path:path, file_name:str, window, out_path:path):
-	Files.DirDelete(out_path)
-	if not (Files.DirNew(out_path)):  return (None)
-
-	data_file = DataCsvLoad(in_path.joinpath(file_name), False)
-	for offset, data_row in rolling(data_file, window):
-		DataCsvSave(data_row, out_path.joinpath(file_name + str('%06.1d' % (offset / window))))
-	return
-
-def DataCsvMerge(in_path:path, file_name:str, out_path:path, ):
-	if not (Files.DirNew(out_path)):  return (None)
-
-	data_file:pandas.DataFrame = pandas.DataFrame()
-	for name in Files.DirFiles(in_path):
-		data_csv = DataCsvLoad(name, False)
-		if data_file.empty:
-			data_file = data_csv
-		else:
-			data_file = data_file.append(data_csv, ignore_index=True)
-
-	DataCsvSave(data_file, out_path.joinpath(file_name))
-	return
-
-
-
-# # Exploratory Data Analysis
-### Target variable
-# There are three class labels to predict: *negative, neutral or positive*.
-# **CONCLUSION: **The class labels are **imbalanced** as we can see below.
-# This is something that we should keep in mind during the model training phase.
-# We could, for instance, make sure the classes are balanced by up/undersampling.
-# In[31]:
-import seaborn# as sns
-seaborn.set(style="darkgrid")
-seaborn.set(font_scale=1.3)
-def ShowDistribution(data_frame:pandas, class_col:str, file_path:path):
-	target_dist = seaborn.catplot(x=class_col, data=data_frame, kind="count", height=6, aspect=1.5, palette="PuBuGn_d")
-	plt.show(block=False);
-	if file_path:
-	    target_dist.savefig(file_path)
-	return
-
-# It could be interesting to see how the TextStats variables relate to the class variable.
-# Therefore we write a function **show_dist** that provides descriptive statistics and a plot per target class.
-# In[15]:
-def show_dist(df, data_col, class_col:str, out_path:path, name:str):
-    print('Descriptive stats for {}'.format(data_col))
-    print('-' * (len(data_col) + 22))
-    #print(data_frame.groupby('airline_sentiment')[data_col].describe())
-    print(df.groupby(class_col)[data_col].describe())
-    bins = np.arange(df[data_col].min(), df[data_col].max() + 1)
-    #grid = sns.FacetGrid(data_frame, col='airline_sentiment', height=5, hue='airline_sentiment', palette="PuBuGn_d")
-    grid = seaborn.FacetGrid(df, col=class_col, height=5, hue=class_col, palette="PuBuGn_d")
-    grid = grid.map(seaborn.distplot, data_col, kde=False, norm_hist=True, bins=bins)
-    plt.show(block=False)
-    grid.savefig(out_path.joinpath(data_col + name))
-    return;
-
-def show_dist_all(df_eda:pandas.DataFrame, class_col:str, out_path:path):
-	# In[16]:
-	show_dist(df_eda, 'count_words', class_col, out_path, '_dist.png')
-
-	# In[17]:
-	show_dist(df_eda, 'count_mentions', class_col, out_path, '_dist.png')
-
-	# In[18]:
-	show_dist(df_eda, 'count_hashtags', class_col, out_path, '_dist.png')
-
-	# In[19]:
-	show_dist(df_eda, 'count_capital_words', class_col, out_path, '_dist.png')
-
-	# In[20]:
-	show_dist(df_eda, 'count_excl_quest_marks', class_col, out_path, '_dist.png')
-
-	# In[21]:
-	show_dist(df_eda, 'count_urls', class_col, out_path, '_dist.png')
-
-	# In[22]:
-	show_dist(df_eda, 'count_emojis', class_col, out_path, '_dist.png')
-	return;
-
-
-# ## Text variable
-# To analyze the text variable we create a class **TextCounts**.
-# In this class we compute some basic statistics on the text variable.
-# This class can be used later in a Pipeline, as well.
-# * **count_words** : number of words in the tweet
-# * **count_mentions** : referrals to other Twitter accounts, which are preceded by a @
-# * **count_hashtags** : number of tag words, preceded by a #
-# * **count_capital_words** : number of uppercase words, could be used to *"shout"* and express (negative) emotions
-# * **count_excl_quest_marks** : number of question or exclamation marks
-# * **count_urls** : number of links in the tweet, preceded by http(s)
-# * **count_emojis** : number of emoji, which might be a good indication of the sentiment
-# In[3]:
-import re
-import emoji
-from sklearn.base import BaseEstimator
-from sklearn.base import  TransformerMixin
-class TextCounts(BaseEstimator, TransformerMixin):
-
-	def count_regex(self, pattern, tweet):
-		return len(re.findall(pattern, tweet))
-
-	def fit(self, X, y=None, **fit_params):
-		# fit method is used when specific operations need to be done on the train data, but not on the test data
-		return self
-
-	def transform(self, X, **transform_params)->pandas.DataFrame:
-		count_words = X.apply(lambda x: self.count_regex(r'\w+', x))
-		count_mentions = X.apply(lambda x: self.count_regex(r'@\w+', x))
-		count_hashtags = X.apply(lambda x: self.count_regex(r'#\w+', x))
-		count_capital_words = X.apply(lambda x: self.count_regex(r'\b[A-Z]{2,}\b', x))
-		count_excl_quest_marks = X.apply(lambda x: self.count_regex(r'!|\?', x))
-		count_urls = X.apply(lambda x: self.count_regex(r'http.?://[^\s]+[\s]?', x))
-
-		# We will replace the emoji symbols with a description, which makes using a regex for counting easier
-		# Moreover, it will result in having more words in the tweet
-		count_emojis = X.apply(lambda x: emoji.demojize(x)).apply(lambda x: self.count_regex(r':[a-z_&]+:', x))
-		data_frame = pandas.DataFrame({'count_words': count_words, 'count_mentions': count_mentions, 'count_hashtags': count_hashtags
-			                  , 'count_capital_words': count_capital_words, 'count_excl_quest_marks': count_excl_quest_marks
-			                  , 'count_urls': count_urls, 'count_emojis': count_emojis})
-		return data_frame
-
-def TextCountsRun(data_frame, text_col:str, class_col:str, out_path:path, show:bool):
-	# In[4]:
-	text_count = TextCounts()
-	#data_frame_eda = text_count.fit_transform(data_frame['text'])
-	data_frame_eda = text_count.fit_transform(data_frame[text_col])
-
-	# Add airline_sentiment to data_fame_eda
-	#data_frame_eda['airline_sentiment'] = data_frame['airline_sentiment']
-	data_frame_eda[class_col] = data_frame[class_col]
-
-	if show:
-		show_dist_all(data_frame_eda, class_col, out_path)
-	return(data_frame_eda)
-
-
-
-
-# **CONCLUSIONS: **
-# * **The number of words** used in the tweets is rather low.
-# Maximum number of words is 36 and there are even tweets with only 2 words.
-# So we'll have to be careful during data cleaning not to remove too many words.
-# On the other hand, the text processing will be faster.
-# Negative tweets contain more words than neutral or positive tweets.
-# * All tweets have at least one **mention**.
-# Probably this is the result of extracting the tweets based on mentions in the Twitter data.
-# There seems to be no difference in number of mentions with regard to the sentiment.
-# * Most of the tweets do not contain **hash tags**.
-# So probably this variable will not be retained during model training.
-# Again, no difference in number of hash tags with regard to the sentiment.
-# * Most of the tweets do not contain **capitalized words** and we do not see a difference in distribution between the sentiments.
-# * The positive tweets seem to be using a bit more **exclamation or question marks**.
-# * Most tweets do not contain a **URL**.
-# * Most tweets do not use **emojis**.
-
-
-# # Text Cleaning
-# Before we start using the tweets' text we clean it.
-# We'll do the this in the class CleanText:
-# - remove the **mentions**, as we want to make the model generalisable to tweets of other airline companies too.
-# - remove the **hash tag sign** (#) but not the actual tag as this may contain information
-# - set all words to **lowercase**
-# - remove all **punctuations**, including the question and exclamation marks
-# - remove the **urls** as they do not contain useful information and we did not notice a distinction in the number of urls used between the sentiment classes.
-# - make sure the converted **emojis** are kept as one word.
-# - remove **digits**
-# - remove **stopwords**
-# - apply the **PorterStemmer** to keep the stem of the words.
-
-# In[5]:
-import string
-from nltk.corpus import stopwords
-from nltk.stem import PorterStemmer
-class CleanText(BaseEstimator, TransformerMixin):
-
-	def remove_mentions(self, input_text):
-		return re.sub(r'@\w+', '', input_text)
-
-	def remove_urls(self, input_text):
-		return re.sub(r'http.?://[^\s]+[\s]?', '', input_text)
-
-	def emoji_oneword(self, input_text):
-		# By compressing the underscore, the emoji is kept as one word
-		return input_text.replace('_', '')
-
-	def remove_punctuation(self, input_text):
-		# Make translation table
-		punct = string.punctuation
-		trantab = str.maketrans(punct, len(punct) * ' ')  # Every punctuation symbol will be replaced by a space
-		return input_text.translate(trantab)
-
-	def remove_digits(self, input_text):
-		return re.sub('\d+', '', input_text)
-
-	def to_lower(self, input_text):
-		return input_text.lower()
-
-	def remove_stopwords(self, input_text):
-		stopwords_list = stopwords.words('english')
-		# Some words which might indicate a certain sentiment are kept via a whitelist
-		whitelist = ["n't", "not", "no"]
-		words = input_text.split()
-		clean_words = [word for word in words if (word not in stopwords_list or word in whitelist) and len(word) > 1]
-		return " ".join(clean_words)
-
-	def stemming(self, input_text):
-		porter = PorterStemmer()
-		words = input_text.split()
-		stemmed_words = [porter.stem(word) for word in words]
-		return " ".join(stemmed_words)
-
-	def fit(self, X, y=None, **fit_params):
-		return self
-
-	def transform(self, X, **transform_params):
-		clean_X = X.apply(self.remove_mentions).apply(self.remove_urls).apply(self.emoji_oneword).apply(
-			self.remove_punctuation).apply(self.remove_digits).apply(self.to_lower).apply(self.remove_stopwords).apply(
-			self.stemming)
-		return clean_X
-
-
-# **NOTE: **One side-effect of text cleaning is that some rows do not have any words left in their text.
-# For the CountVectorizer and TfIdfVectorizer this does not really pose a problem.
-# However, for the Word2Vec algorithm this causes an error.
-
-# There are different strategies that you could apply to deal with these missing values.
-# * Remove the complete row, but in a production environment this is not really desirable.
-# * Impute the missing value with some placeholder text like *[no_text]*
-# * Word2Vec: use the average of all vectors
-#
-# Here we will impute with a placeholder text '[no_text]'.
-
-# In[7]:
-def EmptyText(text_clean):
-	empty_clean = text_clean == ''
-	print('{} records have no words left after text cleaning'.format(text_clean[empty_clean].count()))
-	text_clean.loc[empty_clean] = '[no_text]'
-	return(text_clean)
-
-# To show how the cleaned text variable will look like, here's a sample.
-# In[6]:
-def CleanTextRun(data_frame, text_col, out_path:path, show:bool):
-	text_clean = CleanText().fit_transform(data_frame[text_col])
-	text_clean.sample(5)
-
-	text_clean = EmptyText(text_clean)
-	if show:
-		ShowFreqWords(text_clean, out_path.joinpath('bar_freq_word.png'))
-
-	return (text_clean)
-
-
-
-
-# Now that we have the cleaned text of the tweets, we can have a look at what are the most frequent words.
-# Below we'll show the top 20 words.
-#
-# **CONCLUSION: **Not surprisingly the most frequent word is *flight*.
-# In[29]:
-import collections
-from sklearn.feature_extraction.text import CountVectorizer
-def ShowFreqWords(text_clean, out_file:path):
-	cv = CountVectorizer()
-	bow = cv.fit_transform(text_clean)
-	word_freq = dict(zip(cv.get_feature_names(), np.asarray(bow.sum(axis=0)).ravel()))
-	word_counter = collections.Counter(word_freq)
-	word_counter_df = pandas.DataFrame(word_counter.most_common(20), columns=['word', 'freq'])
-
-	fig, ax = plt.subplots(figsize=(12, 10))
-	bar_freq_word = seaborn.barplot(x="word", y="freq", data=word_counter_df, palette="PuBuGn_d", ax=ax)
-	plt.show(block=False);
-	bar_freq_word.get_figure().savefig(out_file)
-	return;
-
-
-
-# # Creating test data
-# To evaluate the trained models we'll need a **test set**.
-# Evaluating on the train data would not be correct because the models are trained to minimize their cost function.
-#
-# First we combine the TextCounts variables with the CleanText variable.
-# **NOTE: **Initially, I made the mistake to do execute TextCounts and CleanText in the GridSearchCV below.
-# This took too long as it applies these functions each run of the GridSearch.
-# It suffices to run them only once.
-
-# In[8]:
-from sklearn.model_selection import train_test_split
-def CreateTest(df_eda, text_clean, text_name:str):
-	data_frame_model = df_eda
-	data_frame_model[text_name] = text_clean
-	data_frame_model.columns.tolist()
-	return(data_frame_model)
-
-
-
-# So df_model now contains several variables. However, our vectorizers (see below) will only need the *clean_text* variable.
-# The TextCounts variables can be added as such. To specifically select columns, I wrote the class **ColumnExtractor** below.
-# This can be used in the Pipeline afterwards.
-# In[9]:
-class ColumnExtractor(TransformerMixin, BaseEstimator):
-    def __init__(self, cols):
-        self.cols = cols
-
-    def transform(self, X, **transform_params):
-        return X[self.cols]
-
-    def fit(self, X, y=None, **fit_params):
-        return self
 
 
 
@@ -366,8 +39,6 @@ class ColumnExtractor(TransformerMixin, BaseEstimator):
 # * **F1 score: ** Harmonic mean of Precision and Recall.
 #
 # Precision and Recall can be calculated with the elements of the [confusion matrix](https://en.wikipedia.org/wiki/Confusion_matrix)
-
-# In[18]:
 SIZE = 25
 from time import time
 from sklearn.model_selection import GridSearchCV
@@ -375,16 +46,16 @@ from sklearn.pipeline import Pipeline, FeatureUnion
 from sklearn.metrics import classification_report
 from sklearn.externals import joblib
 # Based on http://scikit-learn.org/stable/auto_examples/model_selection/grid_search_text_feature_extraction.html
-def grid_vect(clf, parameters_clf, X_train, X_test, y_train, y_test, count_cols, out_file:path, parameters_text=None, vect=None, is_w2v=False) -> ColumnExtractor:
+def grid_vect(clf, parameters_clf, X_train, X_test, y_train, y_test, count_cols, out_file:path, parameters_text=None, vect=None, is_w2v=False)->TextTools.ColumnExtractor:
 
-	colExtractor = ColumnExtractor(cols=count_cols)
+	colExtractor = TextTools.ColumnExtractor(cols=count_cols)
 	if is_w2v:
 		w2vcols = []
 		for i in range(SIZE):
 			w2vcols.append(i)
-		features = FeatureUnion([('textcounts', colExtractor), ('w2v', ColumnExtractor(cols=w2vcols))], n_jobs=-1)
+		features = FeatureUnion([('textcounts', colExtractor), ('w2v', TextTools.ColumnExtractor(cols=w2vcols))], n_jobs=-1)
 	else:
-		features = FeatureUnion([('textcounts', colExtractor),('pipe', Pipeline([('cleantext', ColumnExtractor(cols='clean_text')), ('vect', vect)]))], n_jobs=-1)
+		features = FeatureUnion([('textcounts', colExtractor),('pipe', Pipeline([('cleantext', TextTools.ColumnExtractor(cols='clean_text')), ('vect', vect)]))], n_jobs=-1)
 
 	pipeline = Pipeline([('features', features), ('clf', clf)])
 
@@ -433,7 +104,6 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 def BestContVect(X_train, X_test, y_train, y_test, count_cols, parameters_mnb:dict, parameters_logreg:dict, parameters_vect:dict, out_path:path):
 	# ## Classifiers
 	# Here we will compare the performance of a MultinomailNB and LogisticRegression.
-	# In[20]:
 	mnb = MultinomialNB()
 	logreg = LogisticRegression()
 
@@ -443,15 +113,14 @@ def BestContVect(X_train, X_test, y_train, y_test, count_cols, parameters_mnb:di
 	# Sklearn's **CountVectorizer** takes all words in all tweets, assigns an ID and counts the frequency of the word per tweet.
 	# This *bag of words* can then be used as input for a classifier.
 	# It is what is called a **sparse** data set, meaning that each record will have many zeroes for the words not occurring in the tweet.
-	# In[38]:
 	countvect = CountVectorizer()
 
-	# In[40]:
 	# MultinomialNB
+	print('***** BestContVect MultinomialNB')
 	best_mnb_countvect = grid_vect(mnb, parameters_mnb, X_train, X_test, y_train, y_test, count_cols, out_path.joinpath('best_mnb_countvect.pkl'), parameters_text=parameters_vect, vect=countvect)
 
-	# In[41]:
 	# LogisticRegression
+	print('***** BestContVect LogisticRegression')
 	best_logreg_countvect = grid_vect(logreg, parameters_logreg, X_train, X_test, y_train, y_test, count_cols, out_path.joinpath('best_logreg_countvect.pkl'), parameters_text=parameters_vect, vect=countvect)
 
 	return(best_mnb_countvect, best_logreg_countvect);
@@ -460,24 +129,21 @@ def BestContVect(X_train, X_test, y_train, y_test, count_cols, parameters_mnb:di
 def BestTfIdf(X_train, X_test, y_train, y_test, count_cols,  parameters_mnb:dict, parameters_logreg:dict, parameters_vect:dict, out_path:path):
 	# ## Classifiers
 	# Here we will compare the performance of a MultinomailNB and LogisticRegression.
-	# In[20]:
 	mnb = MultinomialNB()
 	logreg = LogisticRegression()
-
 
 	# ## TF-IDF
 	# One issue with CountVectorizer is that there might be words that occur frequently in observations of the target classes.
 	# These words do not have discriminatory information and can be removed.
 	# [TF-IDF (term frequency - inverse document frequency)](https://en.wikipedia.org/wiki/Tf%E2%80%93idf) can be used to downweight these frequent words.
-	# In[42]:
 	tfidfvect = TfidfVectorizer()
 
-	# In[43]:
 	# MultinomialNB
+	print('***** BestTfIdf MultinomialNB')
 	best_mnb_tfidf = grid_vect(mnb, parameters_mnb, X_train, X_test, y_train, y_test, count_cols, out_path.joinpath('best_mnb_tfidf.pkl'), parameters_text=parameters_vect, vect=tfidfvect)
 
-	# In[45]:
 	# LogisticRegression
+	print('***** BestTfIdf LogisticRegression')
 	best_logreg_tfidf = grid_vect(logreg, parameters_logreg, X_train, X_test, y_train, y_test, count_cols, out_path.joinpath('best_logreg_tfidf.pkl'), parameters_text=parameters_vect, vect=tfidfvect)
 
 	return(best_mnb_tfidf, best_logreg_tfidf);
@@ -497,15 +163,11 @@ from nltk.tokenize import word_tokenize
 def BestWord2Vec(X_train, X_test, y_train, y_test, count_cols, parameters_logreg:dict, out_path:path):
 	# The Word2Vec algorithm uses lists of words as input.
 	# For that purpose we use the **word_tokenize** method of the the nltk package.
-	# In[27]:
 	SIZE = 25
 	X_train['clean_text_wordlist'] = X_train.clean_text.apply(lambda x: word_tokenize(x))
 	X_test['clean_text_wordlist'] = X_test.clean_text.apply(lambda x: word_tokenize(x))
 	model = gensim.models.Word2Vec(X_train.clean_text_wordlist, min_count=1, size=SIZE, window=3, workers=4)
-
-	# In[28]:
 	model.most_similar('plane', topn=3)
-
 
 	# The Word2Vec model provides a vocabulary of the words in the corpus together with their vector values.
 	# The number of vector values is equal to the chosen **size**.
@@ -517,12 +179,10 @@ def BestWord2Vec(X_train, X_test, y_train, y_test, count_cols, parameters_logreg
 	# Due to the small corpus of tweets, there is a risk of this happening in our case. Therefore we set the min_count value equal to 1.
 	#
 	# The tweets can have a different number of vectors, depending on the number of words it contains.
-	# To use this output for modeling we will aggregate the vectors per tweet to have the same number (i.e. *size*) of input variables per tweet.
+	# To use this output for modeling we will aggregate the vectors per tweet to have the same number (i.e. *size*) of input statistics per tweet.
 	# Therefore we will take the average of all vectors per tweet. We do this with the function **compute_avg_w2v_vector**.
 	# In this function we also check whether the words in the tweet occur in the vocabulary of the word2vec model. If not, a list filled with 0.0 is returned.
 	# Else the average of the word vectors.
-	# In[14]:
-
 	def compute_avg_w2v_vector(w2v_dict, tweet):
 		list_of_word_vectors = [w2v_dict[w] for w in tweet if w in w2v_dict.vocab.keys()]
 
@@ -533,28 +193,25 @@ def BestWord2Vec(X_train, X_test, y_train, y_test, count_cols, parameters_logreg
 
 		return result
 
-	# In[29]:
 	X_train_w2v = X_train['clean_text_wordlist'].apply(lambda x: compute_avg_w2v_vector(model.wv, x))
 	X_test_w2v = X_test['clean_text_wordlist'].apply(lambda x: compute_avg_w2v_vector(model.wv, x))
 
 	# This gives us a Series with a vector of dimension equal to SIZE.
 	# Now we will split this vector and create a DataFrame with each vector value in a separate column.
-	# That way we can concatenate the word2vec variables to the other TextCounts variables.
+	# That way we can concatenate the word2vec statistics to the other TweetsCounts statistics.
 	# We need to reuse the index of X_train and X_test respectively. Otherwise this will give issues (duplicates) in the concatenation later on.
-	# In[30]:
 	X_train_w2v = pandas.DataFrame(X_train_w2v.values.tolist(), index= X_train.index)
 	X_test_w2v = pandas.DataFrame(X_test_w2v.values.tolist(), index= X_test.index)
 
-	# Concatenate with the TextCounts variables
+	# Concatenate with the TweetsCounts statistics
 	X_train_w2v = pandas.concat([X_train_w2v, X_train.drop(['clean_text', 'clean_text_wordlist'], axis=1)], axis=1)
 	X_test_w2v = pandas.concat([X_test_w2v, X_test.drop(['clean_text', 'clean_text_wordlist'], axis=1)], axis=1)
 
 
 	# **NOTE: **We only consider LogisticRegression as we have negative values in the Word2Vec vectors.
-	# MultinomialNB assumes that the variables have a [multinomial distribution](https://en.wikipedia.org/wiki/Multinomial_distribution) which cannot contain negative values.
-
-	# In[31]:
+	# MultinomialNB assumes that the statistics have a [multinomial distribution](https://en.wikipedia.org/wiki/Multinomial_distribution) which cannot contain negative values.
 	logreg = LogisticRegression()
+	print('***** BestWord2Vec LogisticRegression')
 	best_logreg_w2v = grid_vect(logreg, parameters_logreg, X_train_w2v, X_test_w2v,  y_train, y_test, count_cols, out_path.joinpath('best_logreg_w2v.pkl'), is_w2v=True)
 
 	return(best_logreg_w2v)
@@ -583,22 +240,24 @@ def BestWord2Vec(X_train, X_test, y_train, y_test, count_cols, parameters_logreg
 #
 # Thanks to the GridSearchCV, we now know what are the best hyperparameters.
 # So now we can train the best model on **all training data**, including the test data that we split off before.
+from sklearn.feature_extraction.text import CountVectorizer
 def Predict(new_tweets:list, data_frame_model, class_col:str, count_cols:list):
-
-	features = FeatureUnion([     ('textcounts', ColumnExtractor(cols=count_cols))
-		                        ,  ('pipe', Pipeline([('cleantext', ColumnExtractor(cols='clean_text'))
+	start_time = datetime.now()
+	features = FeatureUnion([     ('textcounts', TextTools.ColumnExtractor(cols=count_cols))
+		                        ,  ('pipe', Pipeline([('cleantext', TextTools.ColumnExtractor(cols='clean_text'))
 			                     ,  ('vect', CountVectorizer(max_df=0.5, min_df=1, ngram_range=(1, 2)))]))], n_jobs=-1)
 
 	pipeline = Pipeline([('features', features), ('clf', LogisticRegression(C=1.0, penalty='l2'))])
 
 	best_model = pipeline.fit(data_frame_model.drop(class_col, axis=1), data_frame_model[class_col])
 
-	df_counts_pos = TextCounts().transform(new_tweets)
-	df_clean_pos = CleanText().transform(new_tweets)
+	df_counts_pos = TextTools.TweetsCounts().transform(new_tweets)
+	df_clean_pos =  TextNorm.TweetsClean().transform(new_tweets)
 
 	df_model_pos = df_counts_pos
 	df_model_pos['clean_text'] = df_clean_pos
 	pos_predict = best_model.predict(df_model_pos).tolist()
+	print("***** Predict Time = ", (datetime.now() - start_time))
 	return(pos_predict)
 
 
@@ -609,7 +268,7 @@ def Predict(new_tweets:list, data_frame_model, class_col:str, count_cols:list):
 
 
 
-
+from sklearn.model_selection import train_test_split
 class SentimetTwits:
 	def __init__(self, dump:bool):
 		self._dump = dump
@@ -617,25 +276,33 @@ class SentimetTwits:
 		return
 
 
-	def TweetStat(self, data_frame, text_col:str, lable_col:str, show:bool, out_path:path):
-		#data_frame = LoadDataCsv(in_path)
+	def TextPrepare(self, data_frame, text_col:str, lable_col:str, show:bool, out_path:path):
 		data_frame = data_frame[[text_col, lable_col]]
-		if show:
-			ShowDistribution(data_frame, lable_col, out_path.joinpath('target_dist.png'))
-
-		# In[4]:
-		data_fame_eda = TextCountsRun(data_frame, text_col, lable_col, out_path, show)
+		data_frame_eda = TextTools.TextCountsRun(data_frame, text_col, lable_col)
 
 		# To show how the cleaned text variable will look like, here's a sample.
-		# In[6]:
-		text_clean = CleanTextRun(data_frame, text_col, out_path, show)
+		text_clean = TextNorm.CleanTextRun(data_frame, text_col, '[no_text]')
 
-		#self.data_frame_model = CreateTest(data_fame_eda, text_clean, 'clean_text')
-		return(data_fame_eda, text_clean)
+		return(data_frame_eda, text_clean)
 
+
+	def TextPlots(self, data_frame, data_frame_eda, text_clean, text_col, lable_col:str, out_path:path):
+		DataPlot.ShowDistribution(data_frame, lable_col, out_path.joinpath('target_dist.png'))
+		#show_dist_all(data_frame_eda, lable_col, out_path)
+		DataPlot.show_dist(data_frame_eda, 'count_words', lable_col, out_path, '_dist.png')
+		DataPlot.show_dist(data_frame_eda, 'count_mentions', lable_col, out_path, '_dist.png')
+		DataPlot.show_dist(data_frame_eda, 'count_hashtags', lable_col, out_path, '_dist.png')
+		DataPlot.show_dist(data_frame_eda, 'count_capital_words', lable_col, out_path, '_dist.png')
+		DataPlot.show_dist(data_frame_eda, 'count_excl_quest_marks', lable_col, out_path, '_dist.png')
+		DataPlot.show_dist(data_frame_eda, 'count_urls', lable_col, out_path, '_dist.png')
+		DataPlot.show_dist(data_frame_eda, 'count_emojis', lable_col, out_path, '_dist.png')
+
+		word_counter_df = TextTools.ShowFreqWords(text_clean, out_path.joinpath('bar_freq_word.png'))
+		DataPlot.ShowFrequency(word_counter_df, out_path.joinpath('bar_freq_word.png'))
+		return
 
 	def Train(self, data_fame_eda, text_clean, lable_col:str, out_path):
-		self.data_frame_model = CreateTest(data_fame_eda, text_clean, 'clean_text')
+		self.data_frame_model = TextNorm.TextCleanSet(data_fame_eda, text_clean, 'clean_text')
 
 		# In[10]:
 		X_train, X_test, y_train, y_test = train_test_split(self.data_frame_model.drop(lable_col, axis=1), self.data_frame_model[lable_col], test_size=0.1, random_state=37)
@@ -644,7 +311,6 @@ class SentimetTwits:
 		if(self._dump):   file_path = out_path
 
 		# ### Parameter grids for GridSearchCV
-		# In[11]:
 		# Parameter grid settings for the vectorizers (Count and TFIDF)
 		parameters_vect = {
 			'features__pipe__vect__max_df': (0.25, 0.5, 0.75),
@@ -675,17 +341,16 @@ def RunTrain(file_path:path, file_name:str, text_col:str, lable_col:str, out_pat
 	print("\n\n\n****************Training ", file_name, '****************')
 	start_time = datetime.now()
 
-	if not (Files.DirNew(out_path.joinpath(file_name))):  return(None)
+	if not (Files.DirNew(out_path.joinpath('Train'+file_name))):  return(None)
 
 	sentiments = SentimetTwits(dump=True)
-	data_frame = DataCsvLoad(file_path.joinpath(file_name), True)
+	data_frame = DataTools.DataCsvLoad(file_path.joinpath(file_name), scrumbele=True)
 
-	data_fame_eda, text_clean = sentiments.TweetStat(data_frame, text_col, lable_col, False, out_path.joinpath(file_name))
-	sentiments.Train(data_fame_eda, text_clean, lable_col, out_path.joinpath(file_name))
+	data_frame_eda, text_clean = sentiments.TextPrepare(data_frame, text_col, lable_col, True, out_path.joinpath('Train'+file_name))
+	sentiments.TextPlots(data_frame, data_frame_eda, text_clean, text_col, lable_col, out_path.joinpath('Train'+file_name))
+	sentiments.Train(data_frame_eda, text_clean, lable_col, out_path.joinpath('Train'+file_name))
 
-	# In[32]:
-	# ## New positive tweets
-	# In[33]:
+	## New positive tweets
 	new_positive_tweets = pandas.Series([
 		 "Thank you @VirginAmerica for you amazing customer support team on Tuesday 11/28 at @EWRairport and returning my lost bag in less than 24h! #efficiencyiskey #virginamerica"
 		,"Love flying with you guys ask these years.  Sad that this will be the last trip 😂   @VirginAmerica  #LuxuryTravel"
@@ -693,11 +358,10 @@ def RunTrain(file_path:path, file_name:str, text_col:str, lable_col:str, out_pat
 	pos_predict = sentiments.Predict(new_positive_tweets, lable_col)
 	print(pos_predict)
 
-	# ## New negative tweets
-	# In[34]:
+	## New negative tweets
 	new_negative_tweets = pandas.Series([
 		 "@VirginAmerica shocked my initially with the service, but then went on to shock me further with no response to what my complaint was. #unacceptable @Delta @richardbranson"
-		,"@VirginAmerica this morning I was forced to repack a suitcase w a medical device because it was barely overweight - wasn't even given an option to pay extra. My spouses suitcase then burst at the seam with the added device and had to be taped shut. Awful experience so far!"
+		,"@VirginAmerica this morning I was forced to repack a suitcase worker_lock a medical device because it was barely overweight - wasn't even given an option to pay extra. My spouses suitcase then burst at the seam with the added device and had to be taped shut. Awful experience so far!"
 		,"Board airplane home. Computer issue. Get off plane, traverse airport to gate on opp side. Get on new plane hour later. Plane too heavy. 8 volunteers get off plane. Ohhh the adventure of travel ✈️ @VirginAmerica"])
 	pos_predict = sentiments.Predict(new_negative_tweets, lable_col)
 	print(pos_predict)
@@ -710,32 +374,38 @@ def RunTrain(file_path:path, file_name:str, text_col:str, lable_col:str, out_pat
 
 
 
-def RunPredict(sentiments:SentimetTwits, in_path:path, file_name:str, text_col:str, lable_col:str, out_path:path):
+def RunPredict(sentiments:SentimetTwits, in_path:path, file_name:str, text_col:str, lable_col:str, out_path:path)->pandas:
 	print("\n\n\n**************** Predicting ", file_name, '****************')
 	start_time = datetime.now()
 
 	if not (Files.DirNew(out_path)):  return (None)
-	data_frame = DataCsvLoad(in_path.joinpath(file_name), False)
+	data_frame = DataTools.DataCsvLoad(in_path.joinpath(file_name), False)
 
 	print('Predicting ' + file_name)
 	pos_predict = sentiments.Predict(data_frame[text_col], lable_col)
 
 	print('Reporting' + file_name)
 	data_frame[lable_col] = pos_predict
-	data_frame.to_csv(out_path.joinpath(file_name))
+	DataTools.DataCsvSave(data_frame, out_path.joinpath(file_name))
 
 	print("**************** Total Time = ", (datetime.now() - start_time), '****************\n\n\n')
 	return (data_frame)
 
+def RunReport(data_frame:pandas, text_col:str, lable_col:str, out_path:path):
+	print("\n\n\n**************** Reporting ", '****************')
+	start_time = datetime.now()
 
-def rolling(df, window):
-	position = 0
-	df_length = len(df)
-	while position < df_length:
-		count = df_length - position
-		if count > window: count = window
-		yield position, df[position:position + count]
-		position += count
+	if not (Files.DirNew(out_path)):  return (None)
+	sentiments = SentimetTwits(True)
+	data_frame_eda1, text_clean1 = sentiments.TextPrepare(data_frame, text_col=text_col, lable_col=lable_col, show=True, out_path=out_path)
+	sentiments.TextPlots(data_frame, data_frame_eda1, text_clean1, text_col, lable_col, out_path)
+	print("**************** Total Time = ", (datetime.now() - start_time), '****************\n\n\n')
+	return
+
+
+
+
+
 
 
 import os
@@ -747,20 +417,22 @@ def RunFilePredict(sentiments:SentimetTwits, in_path:path, file_name:str, split_
 	tmp_split:path = path.Path(out_path.joinpath('./tmp_split'))
 	tmp_merge: path = path.Path(out_path.joinpath('./tmp_merge'))
 	if(not os.path.isdir(tmp_split)):
-		DataCsvSplit(in_path, file_name, split_size, tmp_split)
+		DataTools.DataCsvSplit(in_path, file_name, split_size, tmp_split)
 		Files.DirDelete(tmp_merge)
 		if not (Files.DirNew(tmp_merge)):  return (None)
 
 	for name in Files.DirFiles(tmp_split):
 		name_path = path.Path(name)
-		data_frame = DataCsvLoad(name, False)
-		pos_predict = sentiments.Predict(data_frame[text_col], lable_col)
+		data_frame = DataTools.DataCsvLoad(name, False)
+		text_clean = TextNorm.CleanTextRun(data_frame, text_col, '[no_text]')
+		pos_predict = sentiments.Predict(text_clean, lable_col)
 		data_frame[lable_col] = pos_predict
-		DataCsvSave(data_frame, tmp_merge.joinpath(name_path.name))
+		data_frame[text_col] = text_clean
+		DataTools.DataCsvSave(data_frame, tmp_merge.joinpath(name_path.name))
 		Files.FileDelete(name)
 
 
-	DataCsvMerge(tmp_merge, file_name, out_path)
+	DataTools.DataCsvMerge(tmp_merge, file_name, out_path)
 	Files.DirDelete(tmp_split)
 	Files.DirDelete(tmp_merge)
 
@@ -768,16 +440,33 @@ def RunFilePredict(sentiments:SentimetTwits, in_path:path, file_name:str, split_
 	return
 
 
-def RunFileReport(sentiments:SentimetTwits, in_path:path, file_name:str, text_col:str, lable_col:str, out_path:path):
+def RunFileReport(in_path:path, file_name:str, text_col:str, lable_col:str, out_path:path):
 	print("\n\n\n**************** File Reporting ", file_name, '****************')
 	start_time = datetime.now()
 
 	if not (Files.DirNew(out_path)):  return (None)
-	data_frame =  DataCsvLoad(in_path.joinpath(file_name), False)
-	data_fame_eda1, text_clean1 = sentiments.TweetStat(data_frame, text_col=text_col, lable_col=lable_col, show=True, out_path=out_path)
-
+	data_frame =  DataTools.DataCsvLoad(in_path.joinpath(file_name), False)
+	sentiments = SentimetTwits(True)
+	data_frame_eda1, text_clean1 = sentiments.TextPrepare(data_frame, text_col=text_col, lable_col=lable_col, show=True, out_path=out_path)
+	sentiments.TextPlots(data_frame, data_frame_eda1, text_clean1, text_col, lable_col, out_path)
 	print("**************** Total Time = ", (datetime.now() - start_time), '****************\n\n\n')
 	return
+
+
+
+
+
+def RunTweetsSentiment(text_col:str, class_col, train_file:str, predict_file:str):
+	sentiments: SentimetTwits = RunTrain(path.Path('./input'), train_file, text_col, class_col, path.Path('./output'))
+	data_frame:pandas = RunPredict(sentiments, path.Path('./input'), predict_file, text_col, class_col, path.Path('./output').joinpath(predict_file))
+	RunReport(data_frame, text_col, class_col, path.Path('./output').joinpath(predict_file))
+	return
+
+
+def RunTweetsSentimentLarge(text_col:str, class_col, train_file:str, predict_file:str, split_size:int):
+	sentiments: SentimetTwits = RunTrain(path.Path('./input'), train_file, text_col, class_col, path.Path('./output'))
+	RunFilePredict(sentiments, path.Path('./input'), predict_file, split_size, text_col, class_col, path.Path('./output').joinpath(predict_file))
+	RunFileReport(path.Path('./output').joinpath(predict_file), predict_file, text_col, class_col, path.Path('./output').joinpath(predict_file))
 
 
 
@@ -789,21 +478,18 @@ def main(argv):
 	TEXT_COL:str = 'text'
 	SENTIMENT_COL:str = 'sentiment'
 
+	TRAIN_SMALL:str = 'TweetsSmall.csv'
+	TRAIN_FULL:str = 'TweetsFull.csv'
+#	RunTweetsSentiment(TEXT_COL, SENTIMENT_COL, TRAIN_SMALL, TRAIN_FULL)
 
+	SPLIT_SIZE = 1000
+	TEST_FULL:str = 'TweetsFullTest.csv'
+	RunTweetsSentimentLarge(TEXT_COL, SENTIMENT_COL, TRAIN_FULL, TEST_FULL, SPLIT_SIZE)
 
-	TRAAIN_FILE:str = 'TweetsSmall.csv'
-	SPLIT_SIZE = 10
-	sentiments: SentimetTwits = RunTrain(path.Path('./input'), TRAAIN_FILE, TEXT_COL, SENTIMENT_COL, path.Path('./output'))
+	PREDICT_FILE:str = 'ItaiGOT_7_B_before_SA-482000.excel.csv'
+#	RunTweetsSentimentLarge(TEXT_COL, SENTIMENT_COL, TRAIN_FULL, PREDICT_FILE, SPLIT_SIZE)
 
-#	TEST_FILE:str = 'TweetsFull.csv'
-#	RunPredict(sentiments, path.Path('./input'), TEST_FILE, TEXT_COL, SENTIMENT_COL, path.Path('./output').joinpath(TEST_FILE))
-#	RunFileReport(sentiments, path.Path('./input'), TEST_FILE, TEXT_COL, SENTIMENT_COL, path.Path('./output').joinpath(TEST_FILE))
-
-	SPLIT_SIZE= 10
-	PREDICT_FILE:str = 'TweetsSmall.csv'#'ItaiGOT_7_B_before_SA-482000.excel.csv'
-	RunFilePredict(sentiments, path.Path('./input'), PREDICT_FILE, SPLIT_SIZE, TEXT_COL, SENTIMENT_COL, path.Path('./output').joinpath(PREDICT_FILE))
-	RunFileReport(sentiments, path.Path('./input'), PREDICT_FILE, TEXT_COL, SENTIMENT_COL, path.Path('./output').joinpath(PREDICT_FILE))
-	return;
+	return
 
 if __name__ == '__main__':
 	main(sys.argv)
